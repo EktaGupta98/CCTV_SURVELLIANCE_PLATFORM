@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: cctv_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: surveillance
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d surveillance"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cctv_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cctv_backend
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=surveillance
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/app/data/uploads
+      - THUMBNAIL_DIR=/app/data/thumbnails
+      # Support 500 videos × 2 hours each = 10GB each = 50-100GB total storage recommended
+      - MAX_UPLOAD_SIZE=10737418240 # 10GB (supports 2-hour videos at 2-5 Mbps)
+    ports:
+      - "8000:8000"
+    volumes:
+      - cctv_shared_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cctv_worker
+    restart: always
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=surveillance
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/app/data/uploads
+      - THUMBNAIL_DIR=/app/data/thumbnails
+      # Support 500 videos × 2 hours each = 10GB each = 50-100GB total storage recommended
+      - MAX_UPLOAD_SIZE=10737418240 # 10GB (supports 2-hour videos at 2-5 Mbps)
+    volumes:
+      - cctv_shared_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: cctv_frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  cctv_shared_data:
